@@ -1,0 +1,134 @@
+---
+title: "NYPD Shooting Incident Data"
+author: "Vaughn Pourchot"
+date: "2023-10-16"
+output:
+  pdf_document: default
+  html_document: default
+Please run the following command from your terminal so this rmd with render properly:
+  install.packages(c("forecast","ggplot2","zoo"))
+---
+
+## NYPD Shooting Incident Data
+
+Analyzing police department shoot data provides us with a vast amount of information that can be used for good.  Any time data analysis can be used for good then it affects us all.  If shooting data is analysed optimally then communities can operate more smoothly and efficiently.  They can do this because they can feel safe if the police departments know and understand the trends in their area.  The most important of which is identifying specific locations where the incident rate is abnormally high and having the police department and the city officials develop ways to make those areas safer that doesn't involve stationing half of the police department there.
+
+What better place to analyse then New York City.  The diversity of both the population and the environment makes for an ideal data trove to be examined.  Hopefully, we can discover elements that transcend jurisdictions and can help city officials and police departments in other states, or even countries.
+
+
+## Import Data
+
+```{r setup, echo= TRUE, include=FALSE}
+library(tidyverse)
+library(zoo)
+library(forecast)
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+data<- read.csv(url)
+```
+
+## Tidy Data - Remove Unwanted Variables
+
+```{r data-cleaning, include=TRUE}
+clean_data <- data %>%
+  select(-Longitude,-Latitude,-INCIDENT_KEY,-STATISTICAL_MURDER_FLAG,
+         -X_COORD_CD,-Y_COORD_CD,-Lon_Lat,-JURISDICTION_CODE,-PRECINCT)
+```
+
+## Tidy Data - Combining like catagories with Variable
+
+```{r data-catagory-combining, include=TRUE}
+clean_data <- clean_data %>%
+  mutate(
+    PERP_SEX = case_when(
+    PERP_SEX %in% c("", "(null)", "U") ~ "Unknown",
+    TRUE ~ as.character(PERP_SEX)
+  ),
+  LOCATION_DESC = case_when(
+    LOCATION_DESC %in% c("","(null)","Other") ~ "Other",
+    TRUE ~ as.character(LOCATION_DESC)
+  ),
+  LOC_CLASSFCTN_DESC = case_when(
+    LOC_CLASSFCTN_DESC %in% c("","OTHER","Other") ~ "Other",
+    TRUE ~ as.character(LOC_CLASSFCTN_DESC)
+  ),
+  PERP_AGE_GROUP = case_when(
+    PERP_AGE_GROUP %in% c("","(null)","UNKNOWN") ~ "Unknown",
+    TRUE ~ as.character(PERP_AGE_GROUP)
+  ),
+  PERP_RACE = case_when(
+    PERP_RACE %in% c("","(null)","UNKNOWN") ~ "Unkonwn",
+    TRUE ~ as.character(PERP_RACE)
+  ),
+  VIC_AGE_GROUP = case_when(
+    VIC_AGE_GROUP %in% c("1022","UNKNOWN") ~ "Unknown",
+    TRUE ~ as.character(VIC_AGE_GROUP)
+  ),
+  LOC_OF_OCCUR_DESC = case_when(
+    LOC_OF_OCCUR_DESC %in% c("") ~ "Unknown",
+    TRUE ~ as.character(LOC_OF_OCCUR_DESC)
+  )
+  )
+
+```
+
+## Tidy Data - Correct Data Types
+
+```{r data-catagoizing, include=TRUE}
+library(lubridate)
+clean_data$OCCUR_DATE <- mdy(clean_data$OCCUR_DATE)
+clean_data$OCCUR_TIME <- hms(clean_data$OCCUR_TIME)
+clean_data$BORO <- as.factor(clean_data$BORO)
+clean_data$LOC_OF_OCCUR_DESC <- as.factor(clean_data$LOC_OF_OCCUR_DESC)
+clean_data$LOC_CLASSFCTN_DESC <- as.factor(clean_data$LOC_CLASSFCTN_DESC)
+clean_data$LOCATION_DESC <- as.factor(clean_data$LOCATION_DESC)
+clean_data$PERP_AGE_GROUP <- as.factor(clean_data$PERP_AGE_GROUP)
+clean_data$PERP_SEX <- as.factor(clean_data$PERP_SEX)
+clean_data$PERP_RACE <- as.factor(clean_data$PERP_RACE)
+clean_data$VIC_AGE_GROUP <- as.factor(clean_data$VIC_AGE_GROUP)
+clean_data$VIC_SEX <- as.factor(clean_data$VIC_SEX)
+clean_data$VIC_RACE <- as.factor(clean_data$VIC_RACE)
+summary(clean_data)
+```
+
+## Visualizing the Data
+
+## Annual Trend related to number of Daylight Hours
+
+```{r aggregate incident data, echo=FALSE}
+incidents_by_day <- clean_data %>%
+  group_by(OCCUR_DATE) %>%
+  summarize(incidents = n())
+incidents_by_day$smoothed_incidents <- rollmean(incidents_by_day$incidents, k = 60, fill = NA, align = "center")
+ggplot(incidents_by_day, aes(x = OCCUR_DATE, y = smoothed_incidents)) +
+     geom_line(color = "blue", alpha = 0.5) +
+     geom_line(aes(y = incidents), color = "red", alpha = 0.5) +
+     labs(title = "Shooting Incidents Over Time",
+          x = "Date",
+          y = "Number of Incidents",
+          caption = "Red: Daily Incidents, Blue: 365-day Moving Average") +
+     theme_minimal()
+
+incidents_by_day_ts <- ts(incidents_by_day$incidents, frequency = 365)
+incidents_decomposed <- decompose(incidents_by_day_ts)
+plot(incidents_decomposed)
+fit <- stlf(incidents_decomposed$seasonal)
+future_periods <- 365
+forecasted <- forecast(fit, h=future_periods)
+plot(forecasted)
+```
+
+
+```{r model_analysis, echo=FALSE}
+incidents_by_day$day_num <- as.numeric(incidents_by_day$OCCUR_DATE - min(incidents_by_day$OCCUR_DATE))
+linear_model <- lm(incidents ~ day_num, data=incidents_by_day)
+summary(linear_model)
+ggplot(incidents_by_day, aes(x=day_num, y=incidents)) +
+  geom_point(aes(color="Incidents")) + 
+  geom_smooth(method="lm", se=FALSE, color="red", aes(color="Trend Line")) +
+  labs(title="Shooting Incidents Over Time", color="Legend") +
+  xlab("Days Since Start") +
+  ylab("Number of Incidents")
+```
+
+## Conclusion
+There is evidence of seasonality in the rate of shooting incidents throughout the year.  However, the reason for the trend is yet to be determined.  One could argue that there are more hours of daylight in the summer months which means more people are out later than other times of year.  This thesis could be tested by analyzing the time of day for each incident but I would believe that most incidents occur  in the cover of night.  Some bias that I'm experiencing with this data is that I would prefer that the incidents are more nightly than in the daytime because I am someone who is rarely out at night and would thus prefer the daytime to be a safer portion of the day.  You could also argue that the hotter temperatures cause more irritability in people which leads to more aggressive encounters.  This theory would be difficult to test without employing someone with a psychology background.  Ultimately, there is plenty of data here to comb through and find meaningful correlations.  The seasonality of the incidents is only the tip of the iceberg.
